@@ -58,7 +58,8 @@
 
 // Number of maximum high/Low changes per packet.
 // We can handle up to (unsigned long) => 32 bit * 2 H/L changes per bit + 2 for sync
-#define RCSWITCH_MAX_CHANGES 67
+#define RCSWITCH_MAX_CHANGES 131
+#define RCSWITCH_RAW_MAX_CHANGES 512
 
 class RCSwitch {
 
@@ -77,7 +78,7 @@ class RCSwitch {
     void switchOff(char sGroup, int nDevice);
 
     void sendTriState(const char* sCodeWord);
-    void send(unsigned long code, unsigned int length);
+    void send(unsigned long long code, unsigned int length);
     void send(const char* sCodeWord);
     
     #if not defined( RCSwitchDisableReceiving )
@@ -85,13 +86,15 @@ class RCSwitch {
     void enableReceive();
     void disableReceive();
     bool available();
+    bool RAWavailable();
     void resetAvailable();
 
-    unsigned long getReceivedValue();
+    unsigned long long getReceivedValue();
     unsigned int getReceivedBitlength();
     unsigned int getReceivedDelay();
     unsigned int getReceivedProtocol();
     unsigned int* getReceivedRawdata();
+    unsigned int* getRAWReceivedRawdata();
     #endif
   
     void enableTransmit(int nTransmitterPin);
@@ -167,7 +170,7 @@ class RCSwitch {
 
     #if not defined( RCSwitchDisableReceiving )
     static int nReceiveTolerance;
-    volatile static unsigned long nReceivedValue;
+    volatile static unsigned long long nReceivedValue;
     volatile static unsigned int nReceivedBitlength;
     volatile static unsigned int nReceivedDelay;
     volatile static unsigned int nReceivedProtocol;
@@ -176,6 +179,9 @@ class RCSwitch {
      * timings[0] contains sync timing, followed by a number of bits
      */
     static unsigned int timings[RCSWITCH_MAX_CHANGES];
+    static unsigned int RAWtimings[RCSWITCH_RAW_MAX_CHANGES];
+    static unsigned long _lastMicros;
+    static unsigned int RAWtransitions;
     #endif
 
     
