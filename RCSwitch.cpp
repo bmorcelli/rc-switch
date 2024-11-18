@@ -90,7 +90,14 @@ static const RCSwitch::Protocol PROGMEM proto[] = {
   { 200, { 130, 7 }, {  16, 7 }, { 16,  3 }, true},      // protocol 9 Conrad RS-200 TX
   { 365, { 18,  1 }, {  3,  1 }, {  1,  3 }, true },     // protocol 10 (1ByOne Doorbell)
   { 270, { 36,  1 }, {  1,  2 }, {  2,  1 }, true },     // protocol 11 (HT12E)
-  { 320, { 36,  1 }, {  1,  2 }, {  2,  1 }, true }      // protocol 12 (SM5212)
+  { 320, { 36,  1 }, {  1,  2 }, {  2,  1 }, true },     // protocol 12 (SM5212)
+  { 100, { 3, 100 }, { 3, 8 }, { 8, 3 }, false },        // protocol 13 (Mumbi RC-10)
+  { 500, {   1,  14 }, {   1,  3 }, {  3,   1 }, false },    // protocol 14 (Blyss Doorbell Ref. DC6-FR-WH 656185)
+  { 415, {   1,  30 }, {   1,  3 }, {  4,   1 }, false },    // protocol 15 (sc2260R4)
+  { 250, {  20,  10 }, {   1,  1 }, {  3,   1 }, false },    // protocol 16 (Home NetWerks Bathroom Fan Model 6201-500)
+  {  80, {   3,  25 }, {   3, 13 }, { 11,   5 }, false },    // protocol 17 (ORNO OR-GB-417GD)
+  {  82, {   2,  65 }, {   3,  5 }, {  7,   1 }, false },    // protocol 18 (CLARUS BHC993BF-3)
+  { 560, {  16,   8 }, {   1,  1 }, {  1,   3 }, false }     // protocol 19 (NEC)
 };
 
 enum {
@@ -98,7 +105,7 @@ enum {
 };
 
 #if not defined( RCSwitchDisableReceiving )
-volatile unsigned long RCSwitch::nReceivedValue = 0;
+volatile unsigned long long RCSwitch::nReceivedValue = 0;
 volatile unsigned int RCSwitch::nReceivedBitlength = 0;
 volatile unsigned int RCSwitch::nReceivedDelay = 0;
 volatile unsigned int RCSwitch::nReceivedProtocol = 0;
@@ -108,6 +115,9 @@ const unsigned int VAR_ISR_ATTR RCSwitch::nSeparationLimit = 4300;
 // according to discussion on issue #14 it might be more suitable to set the separation
 // limit to the same time as the 'low' part of the sync signal for the current protocol.
 unsigned int RCSwitch::timings[RCSWITCH_MAX_CHANGES];
+unsigned int RCSwitch::RAWtimings[RCSWITCH_RAW_MAX_CHANGES];
+unsigned long RCSwitch::_lastMicros=0;
+unsigned int RCSwitch::RAWtransitions=0;
 #endif
 
 RCSwitch::RCSwitch() {
@@ -133,7 +143,8 @@ void RCSwitch::setProtocol(Protocol protocol) {
   */
 void RCSwitch::setProtocol(int nProtocol) {
   if (nProtocol < 1 || nProtocol > numProto) {
-    nProtocol = 1;  // TODO: trigger an error, e.g. "bad protocol" ???
+    nProtocol = 1; 
+    printf("Error, bad protocol ID. Falling back to protocol 1.\n");
   }
 #if defined(ESP8266) || defined(ESP32)
   this->protocol = proto[nProtocol-1];
@@ -452,7 +463,7 @@ char* RCSwitch::getCodeWordD(char sGroup, int nDevice, bool bStatus) {
  */
 void RCSwitch::sendTriState(const char* sCodeWord) {
   // turn the tristate code word into the corresponding bit pattern, then send it
-  unsigned long code = 0;
+  unsigned long long code = 0;
   unsigned int length = 0;
   for (const char* p = sCodeWord; *p; p++) {
     code <<= 2L;
@@ -462,11 +473,11 @@ void RCSwitch::sendTriState(const char* sCodeWord) {
         break;
       case 'F':
         // bit pattern 01
-        code |= 1L;
+        code |= 1LL;
         break;
       case '1':
         // bit pattern 11
-        code |= 3L;
+        code |= 3LL;
         break;
     }
     length += 2;
@@ -479,12 +490,12 @@ void RCSwitch::sendTriState(const char* sCodeWord) {
  */
 void RCSwitch::send(const char* sCodeWord) {
   // turn the tristate code word into the corresponding bit pattern, then send it
-  unsigned long code = 0;
+  unsigned long long code = 0;
   unsigned int length = 0;
   for (const char* p = sCodeWord; *p; p++) {
-    code <<= 1L;
+    code <<= 1LL;
     if (*p != '0')
-      code |= 1L;
+      code |= 1LL;
     length++;
   }
   this->send(code, length);
@@ -495,7 +506,7 @@ void RCSwitch::send(const char* sCodeWord) {
  * bits are sent from MSB to LSB, i.e., first the bit at position length-1,
  * then the bit at position length-2, and so on, till finally the bit at position 0.
  */
-void RCSwitch::send(unsigned long code, unsigned int length) {
+void RCSwitch::send(unsigned long long code, unsigned int length) {
   if (this->nTransmitterPin == -1)
     return;
 
@@ -509,7 +520,7 @@ void RCSwitch::send(unsigned long code, unsigned int length) {
 
   for (int nRepeat = 0; nRepeat < nRepeatTransmit; nRepeat++) {
     for (int i = length-1; i >= 0; i--) {
-      if (code & (1L << i))
+      if (code & (1LL << i))
         this->transmit(protocol.one);
       else
         this->transmit(protocol.zero);
@@ -576,12 +587,22 @@ void RCSwitch::disableReceive() {
 bool RCSwitch::available() {
   return RCSwitch::nReceivedValue != 0;
 }
-
-void RCSwitch::resetAvailable() {
-  RCSwitch::nReceivedValue = 0;
+bool RCSwitch::RAWavailable() {
+  bool result=false;
+  // there must have at least 10 transitions after 100ms (time to process the protocols before deliver RAW data)
+  if(RCSwitch::RAWtransitions>10 && (micros()-RCSwitch::_lastMicros)>100000) result = true;
+  return result;
 }
 
-unsigned long RCSwitch::getReceivedValue() {
+void RCSwitch::resetAvailable() {
+  RCSwitch::RAWtransitions=0;
+  RCSwitch::_lastMicros=micros()+10000; // gives 10ms od time for settling
+  RCSwitch::nReceivedValue = 0;
+  memset(RCSwitch::RAWtimings,0,RCSWITCH_RAW_MAX_CHANGES);
+  RCSwitch::_lastMicros=micros()+10000; // gives 10ms od time for settling
+}
+
+unsigned long long RCSwitch::getReceivedValue() {
   return RCSwitch::nReceivedValue;
 }
 
@@ -601,6 +622,10 @@ unsigned int* RCSwitch::getReceivedRawdata() {
   return RCSwitch::timings;
 }
 
+unsigned int* RCSwitch::getRAWReceivedRawdata() {
+  return RCSwitch::RAWtimings;
+}
+
 /* helper function for the receiveProtocol method */
 static inline unsigned int diff(int A, int B) {
   return abs(A - B);
@@ -617,7 +642,7 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
     memcpy_P(&pro, &proto[p-1], sizeof(Protocol));
 #endif
 
-    unsigned long code = 0;
+    unsigned long long code = 0;
     //Assuming the longer pulse length is the pulse captured in timings[0]
     const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);
     const unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
@@ -643,14 +668,14 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
     const unsigned int firstDataTiming = (pro.invertedSignal) ? (2) : (1);
 
     for (unsigned int i = firstDataTiming; i < changeCount - 1; i += 2) {
-        code <<= 1;
+        code <<= 1LL;
         if (diff(RCSwitch::timings[i], delay * pro.zero.high) < delayTolerance &&
             diff(RCSwitch::timings[i + 1], delay * pro.zero.low) < delayTolerance) {
             // zero
         } else if (diff(RCSwitch::timings[i], delay * pro.one.high) < delayTolerance &&
                    diff(RCSwitch::timings[i + 1], delay * pro.one.low) < delayTolerance) {
             // one
-            code |= 1;
+            code |= 1LL;
         } else {
             // Failed
             return false;
@@ -671,11 +696,12 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
 void RECEIVE_ATTR RCSwitch::handleInterrupt() {
 
   static unsigned int changeCount = 0;
+  static unsigned int changeRAWCount = 0;
   static unsigned long lastTime = 0;
   static unsigned int repeatCount = 0;
 
   const long time = micros();
-  const unsigned int duration = time - lastTime;
+  unsigned int duration = time - lastTime;
 
   if (duration > RCSwitch::nSeparationLimit) {
     // A long stretch without signal level change occurred. This could
@@ -705,8 +731,19 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
     changeCount = 0;
     repeatCount = 0;
   }
-
   RCSwitch::timings[changeCount++] = duration;
+
+  if(changeRAWCount>= RCSWITCH_RAW_MAX_CHANGES) changeRAWCount = 0;
+  if(duration>100000) { 
+    memset(RCSwitch::RAWtimings,0,RCSWITCH_RAW_MAX_CHANGES);
+    changeRAWCount = 0;
+    duration=65000;
+  }
+  RCSwitch::RAWtimings[changeRAWCount++] = duration;
+  if(changeRAWCount==15) {
+      RCSwitch::RAWtransitions=15;
+      RCSwitch::_lastMicros=time;
+  }
   lastTime = time;  
 }
 #endif
