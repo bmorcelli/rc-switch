@@ -91,13 +91,16 @@ static const RCSwitch::Protocol PROGMEM proto[] = {
   { 365, { 18,  1 }, {  3,  1 }, {  1,  3 }, true },     // protocol 10 (1ByOne Doorbell)
   { 270, { 36,  1 }, {  1,  2 }, {  2,  1 }, true },     // protocol 11 (HT12E)
   { 320, { 36,  1 }, {  1,  2 }, {  2,  1 }, true },     // protocol 12 (SM5212)
-  { 100, { 3, 100 }, { 3, 8 }, { 8, 3 }, false },        // protocol 13 (Mumbi RC-10)
+  { 100, { 3, 100 }, {  3,  8 }, {  8,  3 }, false },        // protocol 13 (Mumbi RC-10)
   { 500, {   1,  14 }, {   1,  3 }, {  3,   1 }, false },    // protocol 14 (Blyss Doorbell Ref. DC6-FR-WH 656185)
   { 415, {   1,  30 }, {   1,  3 }, {  4,   1 }, false },    // protocol 15 (sc2260R4)
   { 250, {  20,  10 }, {   1,  1 }, {  3,   1 }, false },    // protocol 16 (Home NetWerks Bathroom Fan Model 6201-500)
   {  80, {   3,  25 }, {   3, 13 }, { 11,   5 }, false },    // protocol 17 (ORNO OR-GB-417GD)
   {  82, {   2,  65 }, {   3,  5 }, {  7,   1 }, false },    // protocol 18 (CLARUS BHC993BF-3)
-  { 560, {  16,   8 }, {   1,  1 }, {  1,   3 }, false }     // protocol 19 (NEC)
+  { 560, {  16,   8 }, {   1,  1 }, {  1,   3 }, false },    // protocol 19 (NEC)
+  { 250, {   1,   3 }, {   2,  1 }, {  1,   2 }, false }, // protocol 20 (CAME 12bit)
+  { 330, {   1,   34}, {   2,  1 }, {  1,   2 }, false }, // protocol 21 (FAAC 12bit)
+  { 700, {   1,   36}, {   2,  1 }, {  1,   2 }, false }  // protocol 22 (NICE 12bit)
 };
 
 enum {
@@ -547,9 +550,11 @@ void RCSwitch::transmit(HighLow pulses) {
   uint8_t secondLogicLevel = (this->protocol.invertedSignal) ? HIGH : LOW;
   
   digitalWrite(this->nTransmitterPin, firstLogicLevel);
-  delayMicroseconds( this->protocol.pulseLength * pulses.high);
+  delay((this->protocol.pulseLength * pulses.high)/1000);
+  delayMicroseconds((this->protocol.pulseLength * pulses.high)%1000);
   digitalWrite(this->nTransmitterPin, secondLogicLevel);
-  delayMicroseconds( this->protocol.pulseLength * pulses.low);
+  delay((this->protocol.pulseLength * pulses.low)/1000);
+  delayMicroseconds((this->protocol.pulseLength * pulses.low)%1000);
 }
 
 
