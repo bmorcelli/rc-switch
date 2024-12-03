@@ -704,6 +704,7 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   static unsigned int changeRAWCount = 0;
   static unsigned long lastTime = 0;
   static unsigned int repeatCount = 0;
+  static unsigned int repeatRAWCount = 0;
 
   const long time = micros();
   unsigned int duration = time - lastTime;
@@ -718,6 +719,7 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
       // here that a sender will send the signal multiple times,
       // with roughly the same gap between them).
       repeatCount++;
+      repeatRAWCount++;
       if (repeatCount == 2) {
         for(unsigned int i = 1; i <= numProto; i++) {
           if (receiveProtocol(i, changeCount)) {
@@ -729,6 +731,13 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
       }
     }
     changeCount = 0;
+    
+    //waits first signal pass to start recording he raw signal
+    //it reduces noise significantly
+    if(repeatRAWCount==1) {
+      changeRAWCount = 0;
+      memset(RCSwitch::RAWtimings,0,RCSWITCH_RAW_MAX_CHANGES); // clear the vector
+    }
   }
  
   // detect overflow
@@ -738,14 +747,14 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   }
   RCSwitch::timings[changeCount++] = duration;
 
-  if(changeRAWCount>= RCSWITCH_RAW_MAX_CHANGES) changeRAWCount = 0;
-  if(duration>100000) { 
-    memset(RCSwitch::RAWtimings,0,RCSWITCH_RAW_MAX_CHANGES);
+  if(changeRAWCount >= RCSWITCH_RAW_MAX_CHANGES) { 
     changeRAWCount = 0;
-    duration=65000;
+    repeatRAWCount = 0;
   }
   RCSwitch::RAWtimings[changeRAWCount++] = duration;
-  if(changeRAWCount==15) {
+  
+  // activate response for the RAW capture
+  if(repeatRAWCount>=1 && changeRAWCount==15) {
       RCSwitch::RAWtransitions=15;
       RCSwitch::_lastMicros=time;
   }
