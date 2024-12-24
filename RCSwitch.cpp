@@ -698,13 +698,17 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
     return false;
 }
 
+#define RAWPREBUFSIZE 5
 void RECEIVE_ATTR RCSwitch::handleInterrupt() {
 
   static unsigned int changeCount = 0;
   static unsigned int changeRAWCount = 0;
   static unsigned long lastTime = 0;
   static unsigned int repeatCount = 0;
-  static unsigned int repeatRAWCount = 0;
+
+  static unsigned long rawPreBuff[RAWPREBUFSIZE];
+  static unsigned int rawPreCount = 0;
+  static bool rawCopied=false;
 
   const long time = micros();
   unsigned int duration = time - lastTime;
@@ -719,7 +723,6 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
       // here that a sender will send the signal multiple times,
       // with roughly the same gap between them).
       repeatCount++;
-      repeatRAWCount++;
       if (repeatCount == 2) {
         for(unsigned int i = 1; i <= numProto; i++) {
           if (receiveProtocol(i, changeCount)) {
@@ -732,13 +735,9 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
     }
     changeCount = 0;
     
-    //waits first signal pass to start recording he raw signal
-    //it reduces noise significantly
-    if(repeatRAWCount==1) {
-      changeRAWCount = 0;
-      memset(RCSwitch::RAWtimings,0,RCSWITCH_RAW_MAX_CHANGES); // clear the vector
-    }
   }
+
+  
  
   // detect overflow
   if (changeCount >= RCSWITCH_MAX_CHANGES) {
@@ -747,17 +746,46 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   }
   RCSwitch::timings[changeCount++] = duration;
 
-  if(changeRAWCount >= RCSWITCH_RAW_MAX_CHANGES) { 
-    changeRAWCount = 0;
-    repeatRAWCount = 0;
+  if(duration>400000) {
+    rawCopied=false;
+    changeRAWCount=0;
+    memset(RCSwitch::RAWtimings,0,RCSWITCH_RAW_MAX_CHANGES);
+    goto END;
   }
-  RCSwitch::RAWtimings[changeRAWCount++] = duration;
+
+  rawPreCount=rawPreCount+duration-rawPreBuff[0];
+  for(int i = 0; i<(RAWPREBUFSIZE-1); i++) {
+    rawPreBuff[i] = rawPreBuff[i+1];
+  }
+  rawPreBuff[RAWPREBUFSIZE-1] = duration;
+
+  if(rawPreCount>=(RAWPREBUFSIZE*30)) // 5 x 30us
+  {
+    if(!rawCopied) { 
+      for(int i = 0; i<(RAWPREBUFSIZE-1); i++) {
+        if(rawPreBuff[i]>0) RCSwitch::RAWtimings[changeRAWCount++] = rawPreBuff[i];
+      }
+      rawCopied=true;
+    }
+    // detect overflow
+    if(changeRAWCount >= RCSWITCH_RAW_MAX_CHANGES) { 
+      changeRAWCount = 0;
+    }
+
+    RCSwitch::RAWtimings[changeRAWCount++] = duration;
+    
+    // activate response for the RAW capture
+    if(changeRAWCount==15) {
+        RCSwitch::RAWtransitions=15;
+        RCSwitch::_lastMicros=time;
+    }
+  }
+  else {
+    rawCopied=false;
+    changeRAWCount=0;
+  }
+  END:
   
-  // activate response for the RAW capture
-  if(repeatRAWCount>=1 && changeRAWCount==15) {
-      RCSwitch::RAWtransitions=15;
-      RCSwitch::_lastMicros=time;
-  }
   lastTime = time;  
 }
 #endif
