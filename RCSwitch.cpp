@@ -603,7 +603,7 @@ void RCSwitch::resetAvailable() {
   RCSwitch::RAWtransitions=0;
   RCSwitch::_lastMicros=micros()+10000; // gives 10ms od time for settling
   RCSwitch::nReceivedValue = 0;
-  memset(RCSwitch::RAWtimings,0,RCSWITCH_RAW_MAX_CHANGES);
+  memset(RCSwitch::RAWtimings,0,sizeof(RCSwitch::RAWtimings));
   RCSwitch::_lastMicros=micros()+10000; // gives 10ms od time for settling
 }
 
@@ -699,6 +699,7 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
 }
 
 #define RAWPREBUFSIZE 5
+#define NOISE_THRESHOLD 50 // lesser or equal 50ms is treated as noise
 void RECEIVE_ATTR RCSwitch::handleInterrupt() {
 
   static unsigned int changeCount = 0;
@@ -706,9 +707,8 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   static unsigned long lastTime = 0;
   static unsigned int repeatCount = 0;
 
-  static unsigned long rawPreBuff[RAWPREBUFSIZE];
+  static unsigned long rawPreBuff[RAWPREBUFSIZE] = {0,0,0,0,0};
   static unsigned int rawPreCount = 0;
-  static bool rawCopied=false;
 
   const long time = micros();
   unsigned int duration = time - lastTime;
@@ -747,45 +747,46 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   RCSwitch::timings[changeCount++] = duration;
 
   if(duration>400000) {
-    rawCopied=false;
     changeRAWCount=0;
-    memset(RCSwitch::RAWtimings,0,RCSWITCH_RAW_MAX_CHANGES);
+    memset(RCSwitch::RAWtimings,0,sizeof(RCSwitch::RAWtimings));  // Reset signal
+    memset(rawPreBuff,0,sizeof(rawPreBuff));                       // Reset Noise filter
     goto END;
+    duration = 78000;
   }
 
+  // Increment the time sum to identify noise
+  // Noise makes duration be lesser than 30ms (from 2 to 30 most of the time)
   rawPreCount=rawPreCount+duration-rawPreBuff[0];
+  // FIFO logic, Will add the last value to the end of the buffer, and the older to the beginning
   for(int i = 0; i<(RAWPREBUFSIZE-1); i++) {
     rawPreBuff[i] = rawPreBuff[i+1];
   }
+  // save the last time into the last spot of the buffer
   rawPreBuff[RAWPREBUFSIZE-1] = duration;
 
-  if(rawPreCount>=(RAWPREBUFSIZE*30)) // 5 x 30us
-  {
-    if(!rawCopied) { 
-      for(int i = 0; i<(RAWPREBUFSIZE-1); i++) {
-        if(rawPreBuff[i]>0) RCSwitch::RAWtimings[changeRAWCount++] = rawPreBuff[i];
-      }
-      rawCopied=true;
-    }
+  // if the time sum is greater than 150ms, means that the thing is real
+  // but if in a noisy zone, it will miss the first number
+  if(rawPreCount>=(RAWPREBUFSIZE*NOISE_THRESHOLD)) { // 5 x 50us
     // detect overflow
     if(changeRAWCount >= RCSWITCH_RAW_MAX_CHANGES) { 
       changeRAWCount = 0;
     }
 
-    RCSwitch::RAWtimings[changeRAWCount++] = duration;
-    
-    // activate response for the RAW capture
-    if(changeRAWCount==15) {
-        RCSwitch::RAWtransitions=15;
-        RCSwitch::_lastMicros=time;
+    if(duration>NOISE_THRESHOLD) { 
+      RCSwitch::RAWtimings[changeRAWCount++] = duration;
+      
+      // activate response for the RAW capture
+      if(changeRAWCount==15) {
+          RCSwitch::RAWtransitions=15;
+          RCSwitch::_lastMicros=time;
+      }
     }
   }
   else {
-    rawCopied=false;
     changeRAWCount=0;
   }
   END:
   
   lastTime = time;  
-}
+} 
 #endif
