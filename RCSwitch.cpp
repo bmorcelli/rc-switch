@@ -100,7 +100,8 @@ static const RCSwitch::Protocol PROGMEM proto[] = {
   { 560, {  16,   8 }, {   1,  1 }, {  1,   3 }, false },    // protocol 19 (NEC)
   { 250, {   1,   3 }, {   2,  1 }, {  1,   2 }, false }, // protocol 20 (CAME 12bit)
   { 330, {   1,   34}, {   2,  1 }, {  1,   2 }, false }, // protocol 21 (FAAC 12bit)
-  { 700, {   1,   36}, {   2,  1 }, {  1,   2 }, false }  // protocol 22 (NICE 12bit)
+  { 700, {   1,   36}, {   2,  1 }, {  1,   2 }, false }, // protocol 22 (NICE 12bit)
+  { 400, {   0,   10}, {   2,  1 }, {  1,   2 }, false },
 };
 
 enum {
@@ -520,15 +521,32 @@ void RCSwitch::send(unsigned long long code, unsigned int length) {
     this->disableReceive();
   }
 #endif
+  bool keeloq = protocol.syncFactor.high == 0;
 
   for (int nRepeat = 0; nRepeat < nRepeatTransmit; nRepeat++) {
+    if (keeloq) {
+        for (int i = 0; i < 11; ++i) { 
+            this->transmit({ 1, 1 });
+        }
+
+        this->transmit({ 1, 10 });
+    }
+
     for (int i = length-1; i >= 0; i--) {
       if (code & (1LL << i))
         this->transmit(protocol.one);
       else
         this->transmit(protocol.zero);
     }
-    this->transmit(protocol.syncFactor);
+
+    if (!keeloq) {
+        this->transmit(protocol.syncFactor);
+    } else {
+        this->transmit(protocol.one);
+        this->transmit({ 1, 0 });
+
+        this->transmit({ 0, 40 });
+    }
   }
 
   // Disable transmit after sending (i.e., for inverted protocols)
@@ -549,12 +567,17 @@ void RCSwitch::transmit(HighLow pulses) {
   uint8_t firstLogicLevel = (this->protocol.invertedSignal) ? LOW : HIGH;
   uint8_t secondLogicLevel = (this->protocol.invertedSignal) ? HIGH : LOW;
   
-  digitalWrite(this->nTransmitterPin, firstLogicLevel);
-  delay((this->protocol.pulseLength * pulses.high)/1000);
-  delayMicroseconds((this->protocol.pulseLength * pulses.high)%1000);
-  digitalWrite(this->nTransmitterPin, secondLogicLevel);
-  delay((this->protocol.pulseLength * pulses.low)/1000);
-  delayMicroseconds((this->protocol.pulseLength * pulses.low)%1000);
+  if (pulses.high != 0) {
+    digitalWrite(this->nTransmitterPin, firstLogicLevel);
+    delay((this->protocol.pulseLength * pulses.high)/1000);
+    delayMicroseconds((this->protocol.pulseLength * pulses.high)%1000);
+  }
+
+  if (pulses.low != 0) {
+    digitalWrite(this->nTransmitterPin, secondLogicLevel);
+    delay((this->protocol.pulseLength * pulses.low)/1000);
+    delayMicroseconds((this->protocol.pulseLength * pulses.low)%1000);
+  }
 }
 
 
@@ -649,9 +672,14 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
 
     unsigned long long code = 0;
     //Assuming the longer pulse length is the pulse captured in timings[0]
-    const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);
-    const unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
-    const unsigned int delayTolerance = delay * RCSwitch::nReceiveTolerance / 100;
+    const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);    
+    unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
+    unsigned int delayTolerance = delay * RCSwitch::nReceiveTolerance / 100;
+
+    if (p == 23) {
+        delay = 400;
+        delayTolerance = 400 * RCSwitch::nReceiveTolerance / 100;
+    }
     
     /* For protocols that start low, the sync period looks like
      *               _________
@@ -670,9 +698,15 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
      *
      * The 2nd saved duration starts the data
      */
-    const unsigned int firstDataTiming = (pro.invertedSignal) ? (2) : (1);
+    unsigned int firstDataTiming = (pro.invertedSignal) ? (2) : (1);
 
-    for (unsigned int i = firstDataTiming; i < changeCount - 1; i += 2) {
+    unsigned int numBits = 0;
+
+    if (p == 23) {
+        firstDataTiming = 25;
+    }
+
+    for (unsigned int i = firstDataTiming; i < changeCount - 1 && numBits < 64; i += 2, numBits += 1) {
         code <<= 1LL;
         if (diff(RCSwitch::timings[i], delay * pro.zero.high) < delayTolerance &&
             diff(RCSwitch::timings[i + 1], delay * pro.zero.low) < delayTolerance) {
@@ -689,7 +723,7 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
 
     if (changeCount > 7) {    // ignore very short transmissions: no device sends them, so this must be noise
         RCSwitch::nReceivedValue = code;
-        RCSwitch::nReceivedBitlength = (changeCount - 1) / 2;
+        RCSwitch::nReceivedBitlength = numBits; //(changeCount - 1) / 2;
         RCSwitch::nReceivedDelay = delay;
         RCSwitch::nReceivedProtocol = p;
         return true;
@@ -724,6 +758,7 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
       // with roughly the same gap between them).
       repeatCount++;
       if (repeatCount == 2) {
+        Serial.println("Detected");
         for(unsigned int i = 1; i <= numProto; i++) {
           if (receiveProtocol(i, changeCount)) {
             // receive succeeded for protocol i

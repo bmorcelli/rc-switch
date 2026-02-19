@@ -58,7 +58,7 @@
 
 // Number of maximum high/Low changes per packet.
 // We can handle up to (unsigned long) => 32 bit * 2 H/L changes per bit + 2 for sync
-#define RCSWITCH_MAX_CHANGES 131
+#define RCSWITCH_MAX_CHANGES 157
 #define RCSWITCH_RAW_MAX_CHANGES 512
 
 class RCSwitch {
